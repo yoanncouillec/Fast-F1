@@ -84,16 +84,16 @@ def make_path(wname, wdate, sname, sdate):
 
 # define all empty columns for timing data
 EMPTY_LAPS = {'Time': pd.NaT, 'Driver': str(), 'LapTime': pd.NaT,
-              'NumberOfLaps': np.NaN, 'NumberOfPitStops': np.NaN,
+              'NumberOfLaps': np.nan, 'NumberOfPitStops': np.nan,
               'PitOutTime': pd.NaT, 'PitInTime': pd.NaT,
               'Sector1Time': pd.NaT, 'Sector2Time': pd.NaT,
               'Sector3Time': pd.NaT, 'Sector1SessionTime': pd.NaT,
               'Sector2SessionTime': pd.NaT, 'Sector3SessionTime': pd.NaT,
-              'SpeedI1': np.NaN, 'SpeedI2': np.NaN, 'SpeedFL': np.NaN,
-              'SpeedST': np.NaN, 'IsPersonalBest': False}
+              'SpeedI1': np.nan, 'SpeedI2': np.nan, 'SpeedFL': np.nan,
+              'SpeedST': np.nan, 'IsPersonalBest': False}
 
-EMPTY_STREAM = {'Time': pd.NaT, 'Driver': str(), 'Position': np.NaN,
-                'GapToLeader': np.NaN, 'IntervalToPositionAhead': np.NaN}
+EMPTY_STREAM = {'Time': pd.NaT, 'Driver': str(), 'Position': np.nan,
+                'GapToLeader': np.nan, 'IntervalToPositionAhead': np.nan}
 
 
 def timing_data(path: str,
@@ -423,13 +423,6 @@ def _laps_data_driver(driver_raw, empty_vals, drv):
             in_past = True
             continue
 
-        if (lapcnt == 0) and ((drv_data['Time'][lapcnt] - to_timedelta(time)) > pd.Timedelta(5, 'min')):
-            # ignore any data which arrives more than 5 minutes before the end of the first lap, except 'PitOut'
-            if ('InPit' in resp) and (resp['InPit'] is False):
-                drv_data['PitOutTime'][lapcnt] = to_timedelta(time)
-                pitstops = 0  # special here, can be multiple times for no reason therefore set zero instead of +=1
-            continue
-
         # values which are up to five seconds late are still counted towards the previous lap
         # (sector times, speed traps and lap times)
         lap_offset = 0
@@ -705,6 +698,23 @@ def _laps_data_driver(driver_raw, empty_vals, drv):
             pass
         else:
             drv_data['IsPersonalBest'][pb_idx] = True
+
+    # fix the number of pit stops; due to potentially multiple laps to the grid
+    # where a car goes through the pit lane before finally taking its place
+    # on the grid, the number of pit stops on the first lap may be already
+    # greater than zero; therefore, apply correction so that we start with zero
+    pitstop_offset = drv_data['NumberOfPitStops'][0]
+    for i in range(len(drv_data['NumberOfPitStops'])):
+        drv_data['NumberOfPitStops'][i] -= pitstop_offset
+
+    # fix first lap PitInTime; same reason as above for pit stops, there may
+    # be an incorrect PitInTime on the first lap. There always is a PitOutTime
+    # for when the car leaves the box for the lap to the grid. There is a
+    # PitInTime if the car drives multiple laps to the grid, discard these.
+    # There is also a PitInTime if the car actually pits at the end of the
+    # first lap, those need to be kept.
+    if drv_data['PitInTime'][0] < drv_data['PitOutTime'][0]:
+        drv_data['PitInTime'][0] = pd.NaT
 
     if integrity_errors:
         _logger.warning(
@@ -1237,7 +1247,7 @@ def track_status_data(path, response=None, livedata=None):
     if livedata is not None and livedata.has('TrackStatus'):
         # does not need any further processing
         _logger.info("Loading track status data")
-        return livedata.get('TrackStatus')
+        response = livedata.get('TrackStatus')
     elif response is None:
         _logger.info("Fetching track status data...")
         response = fetch_page(path, 'track_status')
@@ -1293,7 +1303,7 @@ def session_status_data(path, response=None, livedata=None):
     if livedata is not None and livedata.has('SessionStatus'):
         # does not need any further processing
         _logger.info("Loading session status data")
-        return livedata.get('SessionStatus')
+        response = livedata.get('SessionStatus')
     elif response is None:
         _logger.info("Fetching session status data...")
         response = fetch_page(path, 'session_status')
@@ -1364,7 +1374,7 @@ def race_control_messages(path, response=None, livedata=None):
     if livedata is not None and livedata.has('RaceControlMessages'):
         # does not need any further processing
         _logger.info("Loading race control messages")
-        return livedata.get('RaceControlMessages')
+        response = livedata.get('RaceControlMessages')
     elif response is None:
         _logger.info("Fetching race control messages...")
         response = fetch_page(path, 'race_control_messages')

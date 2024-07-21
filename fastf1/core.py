@@ -1472,16 +1472,10 @@ class Session:
             # no driver list, generate from lap data
             drivers = set(data['Driver'].unique()) \
                 .intersection(set(useful['Driver'].unique()))
-
             _nums_df = pd.DataFrame({'DriverNumber': list(drivers)},
                                     index=list(drivers))
-            _info_df = pd.DataFrame(fastf1._DRIVER_TEAM_MAPPING).T
-
-            self._results = SessionResults(_nums_df.join(_info_df),
-                                           force_default_cols=True)
-
-            _logger.warning("Generating minimal driver "
-                            "list from timing data.")
+            self._results = SessionResults(_nums_df, force_default_cols=True)
+            _logger.warning("Generating minimal driver list from timing data.")
 
         df = None
         for _, driver in enumerate(drivers):
@@ -1620,7 +1614,7 @@ class Session:
         laps['Driver'] = laps['DriverNumber'].map(d_map)
 
         # add Position based on lap timing
-        laps['Position'] = np.NaN  # create empty column
+        laps['Position'] = np.nan  # create empty column
         if self.name in self._RACE_LIKE_SESSIONS:
             for lap_n in laps['LapNumber'].unique():
                 # get each drivers lap for the current lap number, sorted by
@@ -1633,6 +1627,13 @@ class Session:
                 laps_eq_n['Position'] = range(1, len(laps_eq_n) + 1)
                 laps.loc[laps['LapNumber'] == lap_n, 'Position'] \
                     = laps_eq_n.sort_index()['Position'].to_list()
+
+        # assign NaN to drivers who crashed on lap 1
+        lap_counts = laps['Driver'].value_counts()
+        drivers_with_one_lap = lap_counts[lap_counts == 1].index
+        dnf_and_generated = (laps['FastF1Generated'] &
+                             laps['Driver'].isin(drivers_with_one_lap))
+        laps.loc[dnf_and_generated, 'Position'] = np.nan
 
         self._add_track_status_to_laps(laps)
 
@@ -1744,10 +1745,12 @@ class Session:
                 'Compound': [drv_laps['Compound'].iloc[-1]],
                 'TyreLife': [drv_laps['TyreLife'].iloc[-1] + 1],
                 'FreshTyre': [drv_laps['FreshTyre'].iloc[-1]],
-                'Position': [np.NaN],
+                'Position': [np.nan],
                 'FastF1Generated': [True],
                 'IsAccurate': [False]
             })
+
+            self._add_track_status_to_laps(new_last)
 
             # add generated laps at the end and fix sorting at the end
             self._laps = (pd.concat([self._laps, new_last])
@@ -1835,6 +1838,13 @@ class Session:
             # Don't do anything if results are already available
             # unless force is True
             return
+
+        if self.laps['Deleted'].dtype.name != 'bool':
+            _logger.warning(
+                "Cannot calculate qualifying results: missing information "
+                "about deleted laps. Make sure that race control messages are "
+                "being loaded."
+            )
 
         quali_results = (self._laps.loc[:, ['DriverNumber']].copy()
                          .drop_duplicates()
@@ -2175,21 +2185,24 @@ class Session:
         # set results from either source or join if both data is available
         # use driver info from F1 as primary source, only fall back to Ergast
         # if unavailable
-        # use results from Ergast, unavailable from F1 API
+        # use results from Ergast, if data is unavailable from F1 API
+
+        no_driver_info_f1 = (driver_info_f1 is None) or driver_info_f1.empty
+        no_driver_info_ergast \
+            = (driver_info_ergast is None) or driver_info_ergast.empty
 
         # no data
-        if (driver_info_f1 is None) and (driver_info_ergast is None):  # LP1
-            _logger.warning("Failed to load driver list and "
-                            "session results!")
+        if no_driver_info_f1 and no_driver_info_ergast:
+            _logger.warning("Failed to load driver list and session results!")
             self._results = SessionResults(force_default_cols=True)
 
         # only Ergast data
-        elif driver_info_f1 is None:  # LP2
+        elif no_driver_info_f1:  # LP2
             self._results = SessionResults(driver_info_ergast,
                                            force_default_cols=True)
 
         # only F1 data
-        elif driver_info_ergast is None:  # LP3
+        elif no_driver_info_ergast:
             self._results = SessionResults(driver_info_f1,
                                            force_default_cols=True)
 
@@ -2216,7 +2229,7 @@ class Session:
                 # set (Grid)Position to NaN instead of default last or zero to
                 # make the DNS more obvious
                 self._results.loc[missing_drivers,
-                                  ('Position', 'GridPosition')] = np.NaN
+                                  ('Position', 'GridPosition')] = np.nan
 
         if (dupl_mask := self._results.index.duplicated()).any():
             dupl_drv = list(self._results.index[dupl_mask])
@@ -2235,21 +2248,38 @@ class Session:
             driver_info = {}
         else:
             driver_info = collections.defaultdict(list)
+
             for key1, key2 in {
-                'RacingNumber': 'DriverNumber',
                 'BroadcastName': 'BroadcastName',
-                'Tla': 'Abbreviation', 'TeamName': 'TeamName',
-                'TeamColour': 'TeamColor', 'FirstName': 'FirstName',
-                'LastName': 'LastName', 'HeadshotUrl': 'HeadshotUrl',
+                'Tla': 'Abbreviation',
+                'TeamName': 'TeamName',
+                'TeamColour': 'TeamColor',
+                'FirstName': 'FirstName',
+                'LastName': 'LastName',
+                'HeadshotUrl': 'HeadshotUrl',
                 'CountryCode': 'CountryCode'
             }.items():
                 for entry in f1di.values():
                     driver_info[key2].append(entry.get(key1))
+
+            # special case for driver number which seems to be duplicated and
+            # is used as dictionary key as well; use explicit racing number
+            # property when available, else fallback to using dict key
+            for key, entry in f1di.items():
+                driver_info['DriverNumber'].append(
+                    entry.get('RacingNumber') or key
+                )
+
             if 'FirstName' in driver_info and 'LastName' in driver_info:
                 for first, last in zip(driver_info['FirstName'],
                                        driver_info['LastName']):
                     driver_info['FullName'].append(f"{first} {last}")
-        return pd.DataFrame(driver_info, index=driver_info['DriverNumber'])
+
+        # driver info is required for joining on index (used as index),
+        # therefore drop rows where driver number is unavailable as they have
+        # an invalid index
+        return pd.DataFrame(driver_info, index=driver_info['DriverNumber']) \
+            .dropna(subset=['DriverNumber'])
 
     def _drivers_results_from_ergast(
             self, *, load_drivers=False, load_results=False
@@ -2270,16 +2300,23 @@ class Session:
                 return self._ergast.get_race_results(
                     self.event.year, self.event.RoundNumber
                 )
+
             elif session_name == 'Qualifying':
                 return self._ergast.get_qualifying_results(
                     self.event.year, self.event.RoundNumber
                 )
-            elif session_name in ('Sprint', 'Sprint Qualifying'):
+
+            # double condition because of reuse of the "Sprint Qualifying" name
+            # for a race-like session in 2018 and a quali-like session in 2024+
+            # Ergast only supports the race-like sprint results.
+            elif ('Sprint' in session_name
+                    and session_name in self._RACE_LIKE_SESSIONS):
                 return self._ergast.get_sprint_results(
                     self.event.year, self.event.RoundNumber
                 )
+
             else:
-                # TODO: Use Ergast when/if it supports sprint shootout sessions
+                # TODO: Use Ergast when it supports quali-like sprint results
                 # return self._ergast.get_sprint_shootout_results(
                 #     self.event.year, self.event.RoundNumber
                 # )
@@ -2288,8 +2325,15 @@ class Session:
         response = _get_data()
 
         if not response or not response.content:
-            _logger.warning("No result data for this session available on "
-                            "Ergast! (This is expected for recent sessions)")
+            if (('Sprint' in session_name)
+                    and (session_name in self._QUALI_LIKE_SESSIONS)):
+                _logger.warning(f"{session_name} is not supported by "
+                                f"Ergast! Limited results are calculated from "
+                                f"timing data.")
+            else:
+                _logger.warning("No result data for this session available on "
+                                "Ergast! (This is expected for recent "
+                                "sessions)")
             return None
 
         data = response.content[0]
@@ -2461,6 +2505,12 @@ class Session:
         See :class:`~fastf1.mvapi.CircuitInfo` for detailed information.
         """
         circuit_key = self.session_info['Meeting']['Circuit']['Key']
+
+        if ((circuit_key == 149)
+                and (self.session_info['Meeting']['Circuit']['ShortName']
+                     == 'Mugello')):
+            circuit_key = 146
+
         circuit_info = get_circuit_info(year=self.event.year,
                                         circuit_key=circuit_key)
         circuit_info.add_marker_distance(

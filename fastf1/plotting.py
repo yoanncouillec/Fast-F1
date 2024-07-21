@@ -54,7 +54,7 @@ with warnings.catch_warnings():
                             message="Using slow pure-python SequenceMatcher")
     # suppress that warning, it's confusing at best here, we don't need fast
     # sequence matching and the installation (on windows) some effort
-    from thefuzz import fuzz
+    from rapidfuzz import fuzz
 
 
 class __TeamColorsWarnDict(dict):
@@ -145,6 +145,7 @@ DRIVER_COLORS: Dict[str, str] = {
     "alexander albon": "#005aff",
     "logan sargeant": "#012564",
     "zak osullivan": "#1b3d97",
+    "franco colapinto": "#639aff"
 }
 """Mapping of driver names to driver colors (hex color codes).
 (current season only)"""
@@ -170,7 +171,7 @@ DRIVER_TRANSLATE: Dict[str, str] = {
     'HAM': 'lewis hamilton', 'RUS': 'george russell',
     'VES': 'frederik vesti',
     'ALB': 'alexander albon', 'SAR': 'logan sargeant',
-    'OSU': 'zak osullivan'}
+    'OSU': 'zak osullivan', 'COL': 'franco colapinto'}
 """Mapping of driver names to theirs respective abbreviations."""
 
 COMPOUND_COLORS: Dict[str, str] = {
