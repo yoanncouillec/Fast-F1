@@ -1,0 +1,31 @@
+import json
+import time
+
+file = open("output.txt")
+
+while 1:
+    where = file.tell()
+    line = file.readline()
+    if not line:
+        time.sleep(1)
+        file.seek(where)
+    else:
+
+        line = line.replace("'", '"') \
+            .replace('True', 'true') \
+            .replace('False', 'false')
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            errorcount += 1
+            continue
+        messages = data['M'] if 'M' in data and len(data['M']) > 0 else {}
+        for inner_data in messages:
+            hub = inner_data['H'] if 'H' in inner_data else ''
+            if hub.lower() == 'streaming':
+                # method = inner_data['M']
+                message = inner_data['A']
+                print(message)
+
+        #print(line), # already has newline
+        #print(data)
