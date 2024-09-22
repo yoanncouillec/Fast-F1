@@ -24,9 +24,9 @@ influx_client = InfluxDBClient(
 
 print(influx_client.get_list_database())
 
-race = "spa"
-session = "quali"
-filename = "spa.quali.txt"
+race = "singapore"
+session = "gp"
+filename = "singapore.gp.txt"
 
 def parse_position_z(data):
     decoded_data = zlib.decompress(
@@ -534,11 +534,9 @@ while 1:
 
             if data[0] == "Position.z":
                 parse_position_z(data[1])
-                pass
 
             elif data[0] == "CarData.z":
                 parse_car_data_z(data[1])
-                pass
 
             elif data[0] == "TimingData":
                 #print("TimingData")
